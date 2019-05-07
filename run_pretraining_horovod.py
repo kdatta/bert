@@ -23,6 +23,7 @@ import modeling
 import optimization
 import tensorflow as tf
 from official.utils.logs import hooks_helper
+import horovod.tensorflow as hvd
 
 flags = tf.flags
 
@@ -105,7 +106,9 @@ tf.flags.DEFINE_string("master", None, "[Optional] TensorFlow master URL.")
 flags.DEFINE_integer(
     "num_tpu_cores", 8,
     "Only used if `use_tpu` is True. Total number of TPU cores to use.")
-
+flags.DEFINE_boolean(
+    "use_horovod", None,
+    "enable training with horovod if True.")
 
 def model_fn_builder(bert_config, init_checkpoint, learning_rate,
                      num_train_steps, num_warmup_steps, use_tpu,
@@ -180,7 +183,8 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
     output_spec = None
     if mode == tf.estimator.ModeKeys.TRAIN:
       train_op = optimization.create_optimizer(
-          total_loss, learning_rate, num_train_steps, num_warmup_steps, use_tpu)
+          total_loss, learning_rate, num_train_steps, num_warmup_steps, use_tpu,
+          FLAGS.use_horovod)
 
       output_spec = tf.contrib.tpu.TPUEstimatorSpec(
           mode=mode,
@@ -409,6 +413,11 @@ def _decode_record(record, name_to_features):
 
 
 def main(_):
+
+  # Horovod: initialize Horovod.
+  if FLAGS.use_horovod:
+    hvd.init()
+
   tf.logging.set_verbosity(tf.logging.INFO)
 
   if not FLAGS.do_train and not FLAGS.do_eval:
@@ -475,7 +484,15 @@ def main(_):
           model_dir=FLAGS.output_dir,
           batch_size=FLAGS.train_batch_size,
           every_n_steps=5)
-    estimator.train(input_fn=train_input_fn, max_steps=FLAGS.num_train_steps, hooks=train_hooks)
+    hooks=train_hooks
+    if FLAGS.use_horovod:
+    # Horovod: BroadcastGlobalVariablesHook broadcasts initial variable states from
+    # rank 0 to all other processes. This is necessary to ensure consistent
+    # initialization of all workers when training is started with random weights or
+    # restored from a checkpoint.
+      bcast_hook = hvd.BroadcastGlobalVariablesHook(0)
+      hooks.append(bcast_hook)
+    estimator.train(input_fn=train_input_fn, max_steps=FLAGS.num_train_steps, hooks=hooks)
 
   if FLAGS.do_eval:
     tf.logging.info("***** Running evaluation *****")
