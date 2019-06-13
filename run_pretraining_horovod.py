@@ -24,6 +24,7 @@ import optimization
 import tensorflow as tf
 from official.utils.logs import hooks_helper
 import horovod.tensorflow as hvd
+import sys
 
 flags = tf.flags
 
@@ -73,7 +74,7 @@ flags.DEFINE_integer("num_train_steps", 100000, "Number of training steps.")
 
 flags.DEFINE_integer("num_warmup_steps", 10000, "Number of warmup steps.")
 
-flags.DEFINE_integer("save_checkpoints_steps", 1000,
+flags.DEFINE_integer("save_checkpoints_steps", None, #1000,
                      "How often to save the model checkpoint.")
 
 flags.DEFINE_integer("iterations_per_loop", 1000,
@@ -109,6 +110,12 @@ flags.DEFINE_integer(
 flags.DEFINE_boolean(
     "use_horovod", None,
     "enable training with horovod if True.")
+flags.DEFINE_integer(
+    "inter_op", 2,
+    "Number of inter-op parallelism threads.")
+flags.DEFINE_integer(
+    "intra_op", 20,
+    "Number of intra-op parallelism threads.")
 
 def model_fn_builder(bert_config, init_checkpoint, learning_rate,
                      num_train_steps, num_warmup_steps, use_tpu,
@@ -441,11 +448,17 @@ def main(_):
         FLAGS.tpu_name, zone=FLAGS.tpu_zone, project=FLAGS.gcp_project)
 
   is_per_host = tf.contrib.tpu.InputPipelineConfig.PER_HOST_V2
+  session_config=tf.ConfigProto(
+    inter_op_parallelism_threads=FLAGS.inter_op,
+    intra_op_parallelism_threads=FLAGS.intra_op,
+    allow_soft_placement=True)
+  session_config.gpu_options.visible_device_list = str(hvd.local_rank())
   run_config = tf.contrib.tpu.RunConfig(
       cluster=tpu_cluster_resolver,
       master=FLAGS.master,
       model_dir=FLAGS.output_dir,
       save_checkpoints_steps=FLAGS.save_checkpoints_steps,
+      session_config=session_config,
       tpu_config=tf.contrib.tpu.TPUConfig(
           iterations_per_loop=FLAGS.iterations_per_loop,
           num_shards=FLAGS.num_tpu_cores,
@@ -476,15 +489,17 @@ def main(_):
         input_files=input_files,
         max_seq_length=FLAGS.max_seq_length,
         max_predictions_per_seq=FLAGS.max_predictions_per_seq,
-        is_training=True)
-    #profile_hook = tf.train.ProfilerHook(save_steps=10, output_dir='/tmp/', show_memory=True)
+        is_training=True,
+        num_cpu_threads=8)
+    profile_hook = tf.train.ProfilerHook(save_steps=5, output_dir=FLAGS.output_dir+"."+str(hvd.rank()), show_memory=True)
     #examples_per_sec_hook = get
     train_hooks = hooks_helper.get_train_hooks(
-          ['profilerhook', 'examplespersecondhook'],
+          ['examplespersecondhook'],
           model_dir=FLAGS.output_dir,
           batch_size=FLAGS.train_batch_size,
           every_n_steps=5)
     hooks=train_hooks
+    hooks.append(profile_hook)
     if FLAGS.use_horovod:
     # Horovod: BroadcastGlobalVariablesHook broadcasts initial variable states from
     # rank 0 to all other processes. This is necessary to ensure consistent

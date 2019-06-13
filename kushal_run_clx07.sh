@@ -2,16 +2,16 @@
 #vmstat 1 > /tmp/vmstatlog 2>&1 & 
 
 TENSORFLOW_MODELS_DIR=$HOME/TensorFlow/models
-BERT_BASE_DIR=/data01/kushal/bert/uncased_L-24_H-1024_A-16
+BERT_BASE_DIR=/data/01/kushal/bert/uncased_L-24_H-1024_A-16
 export PYTHONPATH=$PYTHONPATH:$TENSORFLOW_MODELS_DIR
 
 #DATA_DIR=/data01/kushal/bert/tf_examples.tfrecord
-DATA_DIR=/data01/kushal/Wikipedia/BERT_TF_RECORDS/tfrec/*
+DATA_DIR=/data/01/sun/BERT_wiki/ExtractedText_24Apr2019/tfrec/*
 
 #KMP_BLOCKTIME=0 numactl -m 0 -C 0-19,40-59 python run_pretraining.py \
-KMP_BLOCKTIME=1 KMP_AFFINITY="fine,granularity=compact,1,0" python run_pretraining.py \
+OMP_NUM_THREADS=24 KMP_BLOCKTIME=1 KMP_AFFINITY="fine,proclist=[0-23,48-71]" numactl -m 0 python run_pretraining.py \
   --input_file=$DATA_DIR \
-  --output_dir=/data01/kushal/bert/pretraining_output \
+  --output_dir=/data/01/kushal/bert/pretraining_output \
   --do_train=True \
   --bert_config_file=$BERT_BASE_DIR/bert_config.json \
   --init_checkpoint=$BERT_BASE_DIR/bert_model.ckpt \

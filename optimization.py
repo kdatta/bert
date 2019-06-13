@@ -53,6 +53,10 @@ def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu, 
     learning_rate = (
         (1.0 - is_warmup) * learning_rate + is_warmup * warmup_learning_rate)
 
+  # If using multiple workers with Horovod, linearly scale the learning rate
+  if use_horovod:
+    learning_rate = learning_rate * hvd.size()
+
   # It is recommended that you use this optimizer for fine tuning, since this
   # is how the model was trained (note that the Adam m/v variables are NOT
   # loaded from init_checkpoint.)
@@ -67,12 +71,19 @@ def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu, 
   if use_tpu:
     optimizer = tf.contrib.tpu.CrossShardOptimizer(optimizer)
 
+  tvars = tf.trainable_variables()
+
   if use_horovod:
     print("Using Horovod Distributed Optimizer")
     optimizer = hvd.DistributedOptimizer(optimizer)
 
-  tvars = tf.trainable_variables()
-  grads = tf.gradients(loss, tvars)
+    # Explicitly call Horovod's compute_gradient
+    grads_and_vars=optimizer.compute_gradients(loss, tvars)
+    grads = [grad for grad,var in grads_and_vars]
+    tvars = [var for grad,var in grads_and_vars]
+  else:
+    tvars = tf.trainable_variables()
+    grads = tf.gradients(loss, tvars)
 
   # This is how the model was pre-trained.
   (grads, _) = tf.clip_by_global_norm(grads, clip_norm=1.0)

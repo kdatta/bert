@@ -467,11 +467,13 @@ def main(_):
         input_files=input_files,
         max_seq_length=FLAGS.max_seq_length,
         max_predictions_per_seq=FLAGS.max_predictions_per_seq,
-        is_training=True)
+        is_training=True,
+        num_cpu_threads=8)
     #profile_hook = tf.train.ProfilerHook(save_steps=10, output_dir='/tmp/', show_memory=True)
     #examples_per_sec_hook = get
     train_hooks = hooks_helper.get_train_hooks(
-          ['profilerhook', 'examplespersecondhook'],
+          #['profilerhook', 'examplespersecondhook'],
+          ['examplespersecondhook'],
           model_dir=FLAGS.output_dir,
           batch_size=FLAGS.train_batch_size,
           every_n_steps=5)
