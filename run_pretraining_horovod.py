@@ -25,6 +25,7 @@ import tensorflow as tf
 from official.utils.logs import hooks_helper
 import horovod.tensorflow as hvd
 import sys
+import time
 
 flags = tf.flags
 
@@ -177,7 +178,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
 
     import numpy as np
     x=np.sum([np.prod(v.get_shape().as_list()) for v in tf.trainable_variables()])
-    print("Model size: %dM\n" % (x/1000000))
+    tf.logging.info("  *** Model size: %dM\n", (x/1000000))
 
     #tf.logging.info("**** Trainable Variables ****")
     #for var in tvars:
@@ -423,7 +424,11 @@ def main(_):
 
   # Horovod: initialize Horovod.
   if FLAGS.use_horovod:
+    start_time=time.time()
     hvd.init()
+    elapsed_time=time.time()
+    if hvd.rank() == 0:
+      tf.logging.info("  *** Horovod init time: %.3fs", elapsed_time)
 
   tf.logging.set_verbosity(tf.logging.INFO)
 
@@ -452,7 +457,8 @@ def main(_):
     inter_op_parallelism_threads=FLAGS.inter_op,
     intra_op_parallelism_threads=FLAGS.intra_op,
     allow_soft_placement=True)
-  session_config.gpu_options.visible_device_list = str(hvd.local_rank())
+  if FLAGS.use_horovod:
+    session_config.gpu_options.visible_device_list = str(hvd.local_rank())
   run_config = tf.contrib.tpu.RunConfig(
       cluster=tpu_cluster_resolver,
       master=FLAGS.master,
@@ -491,23 +497,34 @@ def main(_):
         max_predictions_per_seq=FLAGS.max_predictions_per_seq,
         is_training=True,
         num_cpu_threads=8)
-    profile_hook = tf.train.ProfilerHook(save_steps=5, output_dir=FLAGS.output_dir+"."+str(hvd.rank()), show_memory=True)
-    #examples_per_sec_hook = get
+    if FLAGS.use_horovod:
+      profile_hook = tf.train.ProfilerHook(save_steps=10, output_dir=FLAGS.output_dir+"."+str(hvd.rank()), show_memory=True)
+    else:
+      profile_hook = tf.train.ProfilerHook(save_steps=10, output_dir=FLAGS.output_dir, show_memory=True)
     train_hooks = hooks_helper.get_train_hooks(
-          ['examplespersecondhook'],
+          ['ExamplesPerSecondHook'],
           model_dir=FLAGS.output_dir,
           batch_size=FLAGS.train_batch_size,
           every_n_steps=5)
-    hooks=train_hooks
-    hooks.append(profile_hook)
+    train_hooks.append(profile_hook)
     if FLAGS.use_horovod:
     # Horovod: BroadcastGlobalVariablesHook broadcasts initial variable states from
     # rank 0 to all other processes. This is necessary to ensure consistent
     # initialization of all workers when training is started with random weights or
     # restored from a checkpoint.
       bcast_hook = hvd.BroadcastGlobalVariablesHook(0)
-      hooks.append(bcast_hook)
-    estimator.train(input_fn=train_input_fn, max_steps=FLAGS.num_train_steps, hooks=hooks)
+      train_hooks.append(bcast_hook)
+    start_time = time.time()
+    estimator.train(input_fn=train_input_fn, max_steps=FLAGS.num_train_steps, hooks=train_hooks)
+    elapsed_time=time.time() - start_time
+    if FLAGS.use_horovod:
+      throughput = (FLAGS.train_batch_size * FLAGS.num_train_steps * hvd.size())/elapsed_time
+    else:
+      throughput = (FLAGS.train_batch_size * FLAGS.num_train_steps)/elapsed_time
+
+    tf.logging.info("***** Reporting Throughput *****")
+    tf.logging.info("  Sentences/second: %.2f", throughput)
+    tf.logging.info("  Tokens/second: %.2f", throughput*FLAGS.max_seq_length)
 
   if FLAGS.do_eval:
     tf.logging.info("***** Running evaluation *****")

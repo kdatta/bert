@@ -74,7 +74,6 @@ def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu, 
   tvars = tf.trainable_variables()
 
   if use_horovod:
-    print("Using Horovod Distributed Optimizer")
     optimizer = hvd.DistributedOptimizer(optimizer)
 
     # Explicitly call Horovod's compute_gradient

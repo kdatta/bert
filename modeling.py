@@ -272,8 +272,12 @@ def gelu(x):
   Returns:
     `x` with the GELU activation applied.
   """
+  #cdf = 0.5 * (1.0 + tf.tanh(
+  #    (np.sqrt(2 / np.pi) * (x + 0.044715 * tf.pow(x, 3)))))
+  sqrt_2_over_pi = 0.797884
+  fitting_const = 0.044715
   cdf = 0.5 * (1.0 + tf.tanh(
-      (np.sqrt(2 / np.pi) * (x + 0.044715 * tf.pow(x, 3)))))
+      (sqrt_2_over_pi * x * (1 + fitting_const * x * x))))
   return x * cdf
 
 
