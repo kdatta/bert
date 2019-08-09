@@ -25,7 +25,7 @@ import tensorflow as tf
 from official.utils.logs import hooks_helper
 import horovod.tensorflow as hvd
 import sys
-import time
+import datetime
 
 flags = tf.flags
 
@@ -75,7 +75,7 @@ flags.DEFINE_integer("num_train_steps", 100000, "Number of training steps.")
 
 flags.DEFINE_integer("num_warmup_steps", 10000, "Number of warmup steps.")
 
-flags.DEFINE_integer("save_checkpoints_steps", None, #1000,
+flags.DEFINE_integer("save_checkpoints_steps", 100, #1000,
                      "How often to save the model checkpoint.")
 
 flags.DEFINE_integer("iterations_per_loop", 1000,
@@ -379,7 +379,8 @@ def input_fn_builder(input_files,
       # `sloppy` mode means that the interleaving is not exact. This adds
       # even more randomness to the training pipeline.
       d = d.apply(
-          tf.contrib.data.parallel_interleave(
+          #tf.contrib.data.parallel_interleave(
+          tf.data.experimental.parallel_interleave(
               tf.data.TFRecordDataset,
               sloppy=is_training,
               cycle_length=cycle_length))
@@ -395,7 +396,8 @@ def input_fn_builder(input_files,
     # and we *don't* want to drop the remainder, otherwise we wont cover
     # every sample.
     d = d.apply(
-        tf.contrib.data.map_and_batch(
+        #tf.contrib.data.map_and_batch(
+        tf.data.experimental.map_and_batch(
             lambda record: _decode_record(record, name_to_features),
             batch_size=batch_size,
             num_parallel_batches=num_cpu_threads,
@@ -414,21 +416,21 @@ def _decode_record(record, name_to_features):
   for name in list(example.keys()):
     t = example[name]
     if t.dtype == tf.int64:
-      t = tf.to_int32(t)
+      #t = tf.to_int32(t)
+      t = tf.cast(t,tf.int32)
     example[name] = t
 
   return example
-
 
 def main(_):
 
   # Horovod: initialize Horovod.
   if FLAGS.use_horovod:
-    start_time=time.time()
+    start_time=datetime.datetime.now()
     hvd.init()
-    elapsed_time=time.time()
+    elapsed_time=datetime.datetime.now() - start_time
     if hvd.rank() == 0:
-      tf.logging.info("  *** Horovod init time: %.3fs", elapsed_time)
+      tf.logging.info("  *** Horovod init time: " + str(elapsed_time.seconds) + ":" + str(elapsed_time.microseconds))
 
   tf.logging.set_verbosity(tf.logging.INFO)
 
@@ -444,8 +446,9 @@ def main(_):
     input_files.extend(tf.gfile.Glob(input_pattern))
 
   tf.logging.info("*** Input Files ***")
-  for input_file in input_files:
-    tf.logging.info("  %s" % input_file)
+  tf.logging.info("  Number of input_files opened: %d" % len(input_files))
+  #for input_file in input_files:
+  #  tf.logging.info("  %s" % input_file)
 
   tpu_cluster_resolver = None
   if FLAGS.use_tpu and FLAGS.tpu_name:
@@ -497,16 +500,16 @@ def main(_):
         max_predictions_per_seq=FLAGS.max_predictions_per_seq,
         is_training=True,
         num_cpu_threads=8)
-    if FLAGS.use_horovod:
-      profile_hook = tf.train.ProfilerHook(save_steps=10, output_dir=FLAGS.output_dir+"."+str(hvd.rank()), show_memory=True)
-    else:
-      profile_hook = tf.train.ProfilerHook(save_steps=10, output_dir=FLAGS.output_dir, show_memory=True)
+    #if FLAGS.use_horovod:
+      #profile_hook = tf.train.ProfilerHook(save_steps=10, output_dir=FLAGS.output_dir+"."+str(hvd.rank()), show_memory=True)
+    #else:
+      #profile_hook = tf.train.ProfilerHook(save_steps=10, output_dir=FLAGS.output_dir, show_memory=True)
     train_hooks = hooks_helper.get_train_hooks(
           ['ExamplesPerSecondHook'],
           model_dir=FLAGS.output_dir,
           batch_size=FLAGS.train_batch_size,
           every_n_steps=5)
-    train_hooks.append(profile_hook)
+    #train_hooks.append(profile_hook)
     if FLAGS.use_horovod:
     # Horovod: BroadcastGlobalVariablesHook broadcasts initial variable states from
     # rank 0 to all other processes. This is necessary to ensure consistent
@@ -514,17 +517,24 @@ def main(_):
     # restored from a checkpoint.
       bcast_hook = hvd.BroadcastGlobalVariablesHook(0)
       train_hooks.append(bcast_hook)
-    start_time = time.time()
+    start_time = datetime.datetime.now()
     estimator.train(input_fn=train_input_fn, max_steps=FLAGS.num_train_steps, hooks=train_hooks)
-    elapsed_time=time.time() - start_time
-    if FLAGS.use_horovod:
-      throughput = (FLAGS.train_batch_size * FLAGS.num_train_steps * hvd.size())/elapsed_time
-    else:
-      throughput = (FLAGS.train_batch_size * FLAGS.num_train_steps)/elapsed_time
-
+    elapsed_time=datetime.datetime.now() - start_time
     tf.logging.info("***** Reporting Throughput *****")
+    if FLAGS.use_horovod and hvd.rank()==0:
+      if FLAGS.use_horovod:
+        throughput = (FLAGS.train_batch_size * FLAGS.num_train_steps * hvd.size())/elapsed_time.seconds
+        tf.logging.info("  Batch/Rank: %d, Steps: %d, Ranks: %d" % (FLAGS.train_batch_size, FLAGS.num_train_steps, hvd.size()))
+      else:
+        throughput = (FLAGS.train_batch_size * FLAGS.num_train_steps)/elapsed_time.seconds
+        tf.logging.info("  Batch/Rank: %d, Steps: %d" % (FLAGS.train_batch_size, FLAGS.num_train_steps))
+    else:
+        throughput = (FLAGS.train_batch_size * FLAGS.num_train_steps)/elapsed_time.seconds
+        tf.logging.info("  Batch/Rank: %d, Steps: %d" % (FLAGS.train_batch_size, FLAGS.num_train_steps))
+
+    tf.logging.info("  Elapsed Time: " + str(elapsed_time.seconds) + " secs")
     tf.logging.info("  Sentences/second: %.2f", throughput)
-    tf.logging.info("  Tokens/second: %.2f", throughput*FLAGS.max_seq_length)
+    print("%.3f" % (1000/throughput))
 
   if FLAGS.do_eval:
     tf.logging.info("***** Running evaluation *****")
